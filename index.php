@@ -186,11 +186,11 @@ if ($allow_demo):
 ?>
 <hr>
 <div style="border:2px dashed red; padding:10px; margin:12px 0;">
-  <h3 style="color:#a00">⚠️ DEMO DE INYECCIÓN SQL (educativa, solo lectura)</h3>
+  <h3 style="color:#a00">INYECCIÓN SQL</h3>
 
   <!-- Formulario simple para enviar payloads de prueba -->
   <form method="get" style="display:flex; gap:8px; align-items:center;">
-    <input type="text" name="raw" placeholder="Ejemplo: ' OR '1'='1"
+    <input type="text" name="raw" placeholder="......."
            value="<?php echo h($raw ?? ''); ?>" style="flex:1;">
     <button>Probar inyección</button>
   </form>

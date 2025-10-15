@@ -182,24 +182,49 @@ function primera_columna_text($pdo, $tabla) {
 if ($allow_demo && isset($pdo)) {
   // Solo si el usuario seleccionó una tabla válida
   if (!empty($selected) && valid_table($selected)) {
+
+    // 1) intentamos la primera columna textual
     $col_text = primera_columna_text($pdo, $selected);
+
+    // 2) Si no hay columna textual, fallback: tomar la PRIMERA columna de la tabla (cualquier tipo)
+    if (!$col_text) {
+      try {
+        $c = $pdo->prepare("
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema='public' AND table_name = :t
+          ORDER BY ordinal_position LIMIT 1
+        ");
+        $c->execute([':t' => $selected]);
+        $firstcol = $c->fetchColumn();
+        if ($firstcol) {
+          $col_text = $firstcol; // la usaremos casteada a text en la consulta
+        }
+      } catch (Exception $e) {
+        // dejamos $col_text = null y mostraremos el error más abajo
+      }
+    }
+
+    // 3) Si tenemos columna (textual o fallback) y recibimos $raw, construimos la consulta VULNERABLE
     if ($col_text && $raw !== '') {
       try {
-        // ⚠️ Consulta INTENCIONALMENTE vulnerable (solo lectura)
-        // Usamos la columna textual detectada para aplicar ILIKE
+        // ---------- Construir consulta VULNERABLE intencional (solo lectura)
+        // NOTA: aquí NO escapamos $raw a propósito para la demo educativa.
+        // USAR SOLO con app_readonly y ALLOW_UNSAFE_DEMO=1.
         $sql_inseguro = sprintf(
           'SELECT * FROM "%s" WHERE "%s"::text ILIKE \'%%%s%%\' ORDER BY 1 DESC LIMIT 50',
           $selected,
           $col_text,
-          str_replace("'", "''", $raw) // escapamos simples para evitar romper el SQL visual mostrado
+          $raw   // <<-- intencionalmente sin escape para la demo
         );
-        // Ejecutamos (recordá: DATABASE_URL debe apuntar a un usuario READ-ONLY)
+
+        // Ejecutamos la consulta tal cual (vulnerable) y obtenemos resultados (solo lectura)
         $results_inseguro = $pdo->query($sql_inseguro)->fetchAll(PDO::FETCH_ASSOC);
       } catch (Exception $e) {
         $error_inseguro = $e->getMessage();
       }
     } elseif (!$col_text) {
-      $error_inseguro = "No se encontró columna textual en la tabla " . h($selected);
+      $error_inseguro = "No se encontró columna en la tabla " . h($selected);
     }
   }
 }
@@ -216,7 +241,7 @@ if ($allow_demo):
   <form method="get" style="display:flex; gap:8px; align-items:center;">
     <!-- mantenemos el selector de tabla en la querystring -->
     <input type="hidden" name="table" value="<?php echo h($selected); ?>" />
-    <input type="text" name="raw" placeholder="Payload: ej. ' OR '1'='1" value="<?php echo h($raw); ?>" style="flex:1;">
+    <input type="text" name="raw" placeholder="Payload: ej. ' OR '1'='1' --" value="<?php echo h($raw); ?>" style="flex:1;">
     <button>Probar inyección</button>
   </form>
 

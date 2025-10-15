@@ -147,84 +147,102 @@ th{background:#fafafa}#controls{display:flex;gap:8px;align-items:center;margin:1
 <hr/><p class="muted">Conexión de <span class="code">DATABASE_URL</span> (formato <span class="code">postgres://user:pass@host:port/db?sslmode=require</span>).</p>
 
 <?php
-// ===================================================================
-// BLOQUE DEMO INSEGURA (solo lectura) - activarse con ALLOW_UNSAFE_DEMO
-// ===================================================================
+// =======================================================
+// 🔴 DEMO INSEGURA MULTI-TABLA: activada solo si ALLOW_UNSAFE_DEMO=1
+// =======================================================
 
-// Si en Render pusiste Environment variable ALLOW_UNSAFE_DEMO = '1', entonces $allow_demo será true.
-// Por defecto (si la variable no existe o es distinta de '1'), el bloque no hace nada.
 $allow_demo = getenv('ALLOW_UNSAFE_DEMO') === '1';
-
-// Leemos el parámetro 'raw' que viene por GET (ej: ?raw=' OR '1'='1)
 $raw = isset($_GET['raw']) ? $_GET['raw'] : '';
-
-// Variables para resultados / SQL generado / errores
-$clientes_inseguro = [];
+$results_inseguro = [];
 $sql_inseguro = '';
 $error_inseguro = '';
+$col_text = null;
 
-// Si el demo está activado y el usuario envía algo en 'raw', construimos una consulta SIN PARAMETRIZAR
-// Esto es exactamente lo que produce la vulnerabilidad SQLi; lo hacemos a propósito para la demo.
-if ($allow_demo && $raw !== '') {
+/**
+ * Devuelve la primera columna textual (text, varchar, character varying, char)
+ * de la tabla $tabla dentro del esquema public.
+ */
+function primera_columna_text($pdo, $tabla) {
   try {
-    // Consulta vulnerable (concatenación directa del input)
-    $sql_inseguro = "SELECT id_cliente, nombre, telefono, correo
-                     FROM cliente
-                     WHERE nombre ILIKE '%{$raw}%'
-                     ORDER BY id_cliente DESC LIMIT 50";
-
-    // Ejecutamos la consulta y guardamos los resultados (solo lectura)
-    $clientes_inseguro = $pdo->query($sql_inseguro)->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare("
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name = :t
+      AND data_type IN ('text','character varying','varchar','char')
+      ORDER BY ordinal_position
+      LIMIT 1
+    ");
+    $stmt->execute([':t' => $tabla]);
+    return $stmt->fetchColumn() ?: null;
   } catch (Exception $e) {
-    // Si hay error (por ejemplo tabla no existe), lo guardamos para mostrarlo
-    $error_inseguro = $e->getMessage();
+    return null;
   }
 }
 
-// Si el demo está activado, mostramos el bloque rojo con formulario y resultados
+if ($allow_demo && isset($pdo)) {
+  // Solo si el usuario seleccionó una tabla válida
+  if (!empty($selected) && valid_table($selected)) {
+    $col_text = primera_columna_text($pdo, $selected);
+    if ($col_text && $raw !== '') {
+      try {
+        // ⚠️ Consulta INTENCIONALMENTE vulnerable (solo lectura)
+        // Usamos la columna textual detectada para aplicar ILIKE
+        $sql_inseguro = sprintf(
+          'SELECT * FROM "%s" WHERE "%s"::text ILIKE \'%%%s%%\' ORDER BY 1 DESC LIMIT 50',
+          $selected,
+          $col_text,
+          str_replace("'", "''", $raw) // escapamos simples para evitar romper el SQL visual mostrado
+        );
+        // Ejecutamos (recordá: DATABASE_URL debe apuntar a un usuario READ-ONLY)
+        $results_inseguro = $pdo->query($sql_inseguro)->fetchAll(PDO::FETCH_ASSOC);
+      } catch (Exception $e) {
+        $error_inseguro = $e->getMessage();
+      }
+    } elseif (!$col_text) {
+      $error_inseguro = "No se encontró columna textual en la tabla " . h($selected);
+    }
+  }
+}
+
 if ($allow_demo):
 ?>
 <hr>
 <div style="border:2px dashed red; padding:10px; margin:12px 0;">
   <h3 style="color:#a00">INYECCIÓN SQL</h3>
 
-  <!-- Formulario simple para enviar payloads de prueba -->
+  <p class="muted">Tabla seleccionada: <strong><?php echo h($selected ?: '(ninguna)'); ?></strong>
+  <?php if ($col_text): ?> — columna usada: <span class="code"><?php echo h($col_text); ?></span><?php endif; ?></p>
+
   <form method="get" style="display:flex; gap:8px; align-items:center;">
-    <input type="text" name="raw" placeholder="......."
-           value="<?php echo h($raw ?? ''); ?>" style="flex:1;">
+    <!-- mantenemos el selector de tabla en la querystring -->
+    <input type="hidden" name="table" value="<?php echo h($selected); ?>" />
+    <input type="text" name="raw" placeholder="Payload: ej. ' OR '1'='1" value="<?php echo h($raw); ?>" style="flex:1;">
     <button>Probar inyección</button>
   </form>
 
   <?php if ($raw !== ''): ?>
-    <!-- Mostramos la consulta exactamente como se construyó (evidencia) -->
-    <p><strong>Consulta generada:</strong></p>
+    <p><strong>Consulta generada (vulnerable):</strong></p>
     <pre style="background:#f8f8f8; padding:8px; border:1px solid #ddd;"><?php echo h($sql_inseguro); ?></pre>
 
     <?php if ($error_inseguro): ?>
-      <!-- Si hubo error, lo mostramos -->
       <p style="color:red;"><?php echo h($error_inseguro); ?></p>
-    <?php elseif (!empty($clientes_inseguro)): ?>
-      <!-- Si hay resultados, los listamos -->
+    <?php elseif (!empty($results_inseguro)): ?>
       <p><strong>Resultados devueltos:</strong></p>
       <table border="1" cellpadding="6" style="border-collapse:collapse; margin-top:8px;">
-        <thead><tr><th>ID</th><th>Nombre</th><th>Teléfono</th><th>Correo</th></tr></thead>
+        <thead><tr>
+          <?php foreach (array_keys($results_inseguro[0]) as $c): ?><th><?php echo h($c); ?></th><?php endforeach; ?>
+        </tr></thead>
         <tbody>
-          <?php foreach ($clientes_inseguro as $c): ?>
-            <tr>
-              <td><?php echo h($c['id_cliente']); ?></td>
-              <td><?php echo h($c['nombre']); ?></td>
-              <td><?php echo h($c['telefono']); ?></td>
-              <td><?php echo h($c['correo']); ?></td>
-            </tr>
+          <?php foreach ($results_inseguro as $r): ?>
+            <tr><?php foreach ($r as $v): ?><td><?php echo h($v); ?></td><?php endforeach; ?></tr>
           <?php endforeach; ?>
         </tbody>
       </table>
     <?php else: ?>
-      <!-- Si no hay filas, aviso -->
-      <p style="color:#666;">Sin resultados o tabla vacía.</p>
+      <p style="color:#666;">Sin resultados (o tabla vacía).</p>
     <?php endif; ?>
   <?php endif; ?>
 </div>
-<?php endif; // fin allow_demo ?>
+<?php endif; ?>
 
 </body></html>
